@@ -101,10 +101,16 @@ end
 % Sanity check:
 x_lla = zeros(length(prob_sort),3); cmat = parula(length(prob_sort));
 for ind=1:T_tot
-    X0 = prob_sort(1).x0'; 
+    if ind == 1
+        X0 = prob_sort(1).x0'; 
+    else
+        X0 = prob_sort(ind-1).x0'; 
+    end
     Xi = prob_sort(ind).x0'; 
-    if norm(Xi - X0) < 50e3 % 50 km
+    if norm(Xi - X0) < 50000 % 100m
         x_lla(ind,:) = ecef2lla(prob_sort(ind).x0','WGS84'); 
+    else
+        prob_sort(ind).x0 = prob_sort(ind_t-1).x0;
     end
 end
 SZ = size(x_lla);
@@ -123,7 +129,7 @@ colorbar('southoutside','TickLabelInterpreter','latex','FontSize',24,...
 
 %% Save LLA:
 
-writematrix(x_lla, 'LLA.csv')
+writematrix(x_lla, 'LLA_NR.csv')
 %% Functions:
 
 function ephem_prob = ephem_process(ephem_file, prob)
@@ -439,11 +445,14 @@ function prob = NR_GPS(prob)
         if iter > max_iter
             break
         end
+        [~,ind] = unique(prob.Svid);
+        Cn0 = prob.Cn0DbHz(ind);
+        W = diag(Cn0);
         prob.G = G_mat(prob.sat_pos_unique, prob.x0, size(prob.sat_pos_unique,2));
         prob.rho_theo = compute_rho(prob.sat_pos_calc, prob.x0, prob.bu, prob.B, size(prob.sat_pos_calc,2));
         prob = rho_iono_free(prob, 'theo');
         d_rho = prob.rho_meas_IF'-prob.rho_theo_IF';
-        d_x = (prob.G'*prob.G)\prob.G'*d_rho;
+        d_x = (prob.G'*W*prob.G)\prob.G'*W*d_rho;
         prob.x0 = prob.x0 + d_x(1:3);
         prob.bu = prob.bu + d_x(end);
     end

@@ -44,7 +44,7 @@ function prob_smooth = find_carrier_phase(prob_sort)
     end
 end
 
-% WRONG!!!!!
+
 function prob_smooth = carrier_smoothing(prob_smooth)
     len_w = 20; % Measurements
     for ind_t = 1:length(prob_smooth)

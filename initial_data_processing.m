@@ -45,3 +45,9 @@ end
 writematrix(Data_out.accel, 'accel.csv');
 writematrix(Data_out.gyro, 'gyro.csv');
 writematrix(Data_out.mag, 'mag.csv');
+%% Read Ground Truth NMEA Files and save them as CSV Files:
+[nmea] = ReadNmeaFile(pwd, 'SPAN_Mi8_10Hz.nmea');
+gga = struct2table([nmea.Gga]);
+rmc = struct2table([nmea.Rmc]);
+writetable(gga, 'GT_gga.csv')
+writetable(rmc, 'GT_rmc.csv')

@@ -6,8 +6,8 @@ prob_sort = gyro_accel_sort(accel, gyro, prob_sort);
 
 %% Kalman Filter:
 % R and Q parameters:
-r = 30;
-q = 5;
+r = 8;
+q = 3;
 % Initial State:
 mu = [prob_sort(1).x0; 0; 0; 0; 0; 0; 0; 0];
 clear prob_tight
@@ -26,7 +26,8 @@ end
 title('Receiver position in LLA frame using WGS84 datum');
 colorbar('southoutside','TickLabelInterpreter','latex','FontSize',24,...
     'TicksMode','manual','Ticks',[0, 1], 'TickLabels',{'$t = 0$', '$t = t_{end}$'})
-
+%% Save LLA
+writematrix(x_lla, 'LLA_EKF.csv')
 %% Functions:
 
 function prob_out = tightly_coupled(prob_sort, q, r, mu)
@@ -47,8 +48,14 @@ function prob_out = tightly_coupled(prob_sort, q, r, mu)
     
     T_tot = length(prob_sort);
     for ind_t = 1:T_tot
-        if isempty(prob_sort(ind_t).sat_pos_calc) || isempty(prob_sort(ind_t).a_cal)
-            break
+        if isempty(prob_sort(ind_t).sat_pos_calc) || isempty(prob_sort(ind_t).a_cal) % No IMU or GNSS data
+            % Use WLS previous position
+            prob_out(ind_t).x0_kf = prob_sort(ind_t).x0;
+            prob_out(ind_t).bu_kf = prob_sort(ind_t).bu;
+            % Use previous timestep's values for the rest of the state variables
+            prob_out(ind_t).v0_kf = prob_out(ind_t-1).v0_kf; 
+            prob_out(ind_t).ang_kf = prob_out(ind_t-1).ang_kf;
+            continue
         end
         
         if ind_t == T_tot
@@ -104,10 +111,22 @@ function prob_out = tightly_coupled(prob_sort, q, r, mu)
         [mu, P] = kalman_filter_ekf(A, B, H, R, Q, P, mu, z, u_ecef', h);
 
         % Save updated states:
-        prob_out(ind_t).x0_kf = mu(1:3);
-        prob_out(ind_t).bu_kf = mu(4);
-        prob_out(ind_t).v0_kf = mu(5:7);
-        prob_out(ind_t).ang_kf = mu(8:10);
+        if ind_t == 1
+            prob_out(ind_t).x0_kf = mu(1:3);
+            prob_out(ind_t).bu_kf = mu(4);
+            prob_out(ind_t).v0_kf = mu(5:7);
+            prob_out(ind_t).ang_kf = mu(8:10);
+        elseif norm(prob_out(ind_t-1).x0_kf - mu(1:3)) > 1000 % 1km
+            prob_out(ind_t).x0_kf = prob_sort(ind_t).x0; % Use WLS previous position
+            prob_out(ind_t).bu_kf = prob_sort(ind_t).bu; 
+            prob_out(ind_t).v0_kf = prob_out(ind_t-1).v0_kf; % Use previous timestep's values for the rest of the state variables
+            prob_out(ind_t).ang_kf = prob_out(ind_t-1).ang_kf;
+        else
+            prob_out(ind_t).x0_kf = mu(1:3);
+            prob_out(ind_t).bu_kf = mu(4);
+            prob_out(ind_t).v0_kf = mu(5:7);
+            prob_out(ind_t).ang_kf = mu(8:10);
+        end
     end
 end
 
