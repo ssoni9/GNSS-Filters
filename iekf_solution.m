@@ -1,13 +1,14 @@
-accel = table2array(readtable('accel.csv','ReadVariableNames',0));
-gyro = table2array(readtable('gyro.csv','ReadVariableNames',0));
-prob_sort(1).a = [];
-prob_sort(1).w = [];
-prob_sort = gyro_accel_sort(accel, gyro, prob_sort);
-
-%% Kalman Filter:
+%{
+Filename: iEKF_solution.m
+by, Shivam Soni - 06/04/2021
+1) iEKF Implementation
+2) Run after "kalman_filtering.m"
+%}
+%% iEKF
+clc;
 % R and Q parameters:
-r = 8;
-q = 3;
+r = .1;
+q = 30;
 % Initial State:
 mu = [prob_sort(1).x0; 0; 0; 0; 0; 0; 0; 0];
 clear prob_tight
@@ -15,7 +16,6 @@ tic
 prob_tight = tightly_coupled(prob_sort, q, r, mu);
 t = toc;
 t/length(prob_tight)
-
 %% Plot LLA
 x_lla = zeros(length(prob_tight),3); cmat = parula(length(prob_tight));
 for ind=1:length(prob_tight)
@@ -29,7 +29,9 @@ title('Receiver position in LLA frame using WGS84 datum');
 colorbar('southoutside','TickLabelInterpreter','latex','FontSize',24,...
     'TicksMode','manual','Ticks',[0, 1], 'TickLabels',{'$t = 0$', '$t = t_{end}$'})
 %% Save LLA
-writematrix(x_lla, 'LLA_EKF.csv')
+disp('Saving...')
+writematrix(x_lla, 'LLA_iEKF.csv')
+disp('Saved!')
 %% Functions:
 
 function prob_out = tightly_coupled(prob_sort, q, r, mu)
@@ -49,7 +51,6 @@ function prob_out = tightly_coupled(prob_sort, q, r, mu)
     prob_out(1).ang_kf = mu(7:9);
     
     T_tot = length(prob_sort);
-    tic
     for ind_t = 1:T_tot
         if isempty(prob_sort(ind_t).sat_pos_calc) || isempty(prob_sort(ind_t).a_cal) % No IMU or GNSS data
             % Use WLS previous position
@@ -70,30 +71,9 @@ function prob_out = tightly_coupled(prob_sort, q, r, mu)
         % Control Matrices:
         A = diag(ones(10,1)) + diag([dt*ones(3,1); 0; 0; 0], 4);
         B = [zeros(4,6); diag(dt*ones(6,1))];
-        
-        % Jacobian:
-        meas_len = length(prob_sort(ind_t).rho_meas);
-        H = zeros(meas_len, 10); h = zeros(meas_len, 1);
-        for ind_sat = 1:meas_len
-            if ind_t == 1
-                X = prob_sort(ind_t).sat_pos_calc(1,ind_sat) - prob_out(ind_t).x0_kf(1);
-                Y = prob_sort(ind_t).sat_pos_calc(2,ind_sat) - prob_out(ind_t).x0_kf(2);
-                Z = prob_sort(ind_t).sat_pos_calc(3,ind_sat) - prob_out(ind_t).x0_kf(3);
-            else
-                X = prob_sort(ind_t).sat_pos_calc(1,ind_sat) - prob_out(ind_t-1).x0_kf(1);
-                Y = prob_sort(ind_t).sat_pos_calc(2,ind_sat) - prob_out(ind_t-1).x0_kf(2);
-                Z = prob_sort(ind_t).sat_pos_calc(3,ind_sat) - prob_out(ind_t-1).x0_kf(3);
-            end    
-            eta = sqrt(X^2 + Y^2 + Z^2);
-            H(ind_sat,:) = [-X/eta, -Y/eta, -Z/eta, 1, 0, 0, 0, 0, 0, 0];
-            if ind_t == 1
-                h(ind_sat,1) = eta + prob_out(ind_t).bu_kf - prob_sort(ind_t).B(ind_sat);
-            else
-                h(ind_sat,1) = eta + prob_out(ind_t-1).bu_kf - prob_sort(ind_t).B(ind_sat);
-            end
-        end
 
         % Measurement noise
+        meas_len = length(prob_sort(ind_t).rho_meas);
         R = r*diag(ones(meas_len,1));
 
         % Measurement:
@@ -111,7 +91,9 @@ function prob_out = tightly_coupled(prob_sort, q, r, mu)
         end
         
         % Call Kalman Filter
-        [mu, P] = kalman_filter_ekf(A, B, H, R, Q, P, mu, z, u_ecef', h);
+        [mu, P] = i_ekf(A, B, Q, R, P, mu, z, u_ecef', prob_sort(ind_t));
+
+%         [mu, P] = kalman_filter_ekf(A, B, H, R, Q, P, mu, z, u_ecef', h);
 
         % Save updated states:
         if ind_t == 1
@@ -120,6 +102,7 @@ function prob_out = tightly_coupled(prob_sort, q, r, mu)
             prob_out(ind_t).v0_kf = mu(5:7);
             prob_out(ind_t).ang_kf = mu(8:10);
         elseif norm(prob_out(ind_t-1).x0_kf - mu(1:3)) > 1000 % 1km
+            sprintf('AAAA')
             prob_out(ind_t).x0_kf = prob_sort(ind_t).x0; % Use WLS previous position
             prob_out(ind_t).bu_kf = prob_sort(ind_t).bu; 
             prob_out(ind_t).v0_kf = prob_out(ind_t-1).v0_kf; % Use previous timestep's values for the rest of the state variables
@@ -131,6 +114,67 @@ function prob_out = tightly_coupled(prob_sort, q, r, mu)
             prob_out(ind_t).ang_kf = mu(8:10);
         end
     end
+end
+
+
+
+
+function [mu_t_t, S_t_t] = i_ekf(A, B, Q, R, S_tm_tm, mu_tm_tm, y, u, prob_sort)
+    % Predict:
+    mu_t_tm = A*mu_tm_tm + B*u; % Mean
+    S_t_tm = A*S_tm_tm*A' + Q; % Covariance
+    
+    % Update:
+    mu_t = mu_t_tm;
+    conv = 0;
+    tol = 1e-5;
+    iter = 0;
+    while ((~conv) && (iter < 500))
+        C = meas_J(mu_t, prob_sort);
+        K_t = S_t_tm*C'/(C*S_t_tm*C' + R);
+        temp = mu_t;
+        mu_t = mu_t_tm + K_t*(y - meas_fn(mu_t, prob_sort)) + K_t*C*(mu_t - mu_t_tm);
+        conv = norm(mu_t - temp) < tol;
+        iter = iter+1;
+    end
+    mu_t_t = mu_t;
+    S_t_t = S_t_tm - K_t*C*S_t_tm;
+end
+
+function C = meas_J(mu, prob_sort)
+    meas_len = length(prob_sort.rho_meas);
+    C = zeros(meas_len, 10);
+    for ind_sat = 1:meas_len
+        X = prob_sort.sat_pos_calc(1,ind_sat) - mu(1);
+        Y = prob_sort.sat_pos_calc(2,ind_sat) - mu(2);
+        Z = prob_sort.sat_pos_calc(3,ind_sat) - mu(3);
+        eta = sqrt(X^2 + Y^2 + Z^2);
+        C(ind_sat,:) = [-X/eta, -Y/eta, -Z/eta, 1, 0, 0, 0, 0, 0, 0];
+    end
+end
+
+function h = meas_fn(mu, prob_sort)
+    meas_len = length(prob_sort.rho_meas);
+    h = zeros(meas_len, 1);
+    for ind_sat = 1:meas_len
+        X = prob_sort.sat_pos_calc(1,ind_sat) - mu(1);
+        Y = prob_sort.sat_pos_calc(2,ind_sat) - mu(2);
+        Z = prob_sort.sat_pos_calc(3,ind_sat) - mu(3);
+        eta = sqrt(X^2 + Y^2 + Z^2);
+        h(ind_sat,1) = eta + mu(4) - prob_sort.B(ind_sat);
+    end
+end
+
+function [u_vec, m_sm] = kf_meas_vec(a, w, m)
+    a_sm = smooth_mean(a);
+    w_sm = smooth_mean(w);
+    m_sm = smooth_mean(m);
+    u_vec = [reshape(a_sm, 1, 3), reshape(w_sm, 1, 3)];
+end
+
+
+function vec_out = smooth_mean(mat)
+    vec_out = mean(smoothdata(mat, 1, "gaussian", [4,4]), 1); 
 end
 
 function u_ecef = body2ecef(acc_gyr, mag, pos)
@@ -146,29 +190,4 @@ function u_ecef = body2ecef(acc_gyr, mag, pos)
     avec_ecef = R_ecef2ned'*avec_ned_no_g';
     wvec_ecef = R_ecef2ned'*gyr';
     u_ecef = [reshape(avec_ecef, 1, 3), reshape(wvec_ecef, 1, 3)];
-end
-
-function [mu_t_t, P_t_t] = kalman_filter_ekf(A, B, H, R, Q, P_tm_tm, mu_tm_tm, z_t, u_t, h_mu_t_tm)
-    % Predict:
-    mu_t_tm = A*mu_tm_tm + B*u_t;
-    P_t_tm = A*P_tm_tm*A' + Q;
-    
-    % Update:
-    y_t = z_t - h_mu_t_tm;
-    K_t = P_t_tm*H'/(R + H*P_t_tm*H');
-    mu_t_t = mu_t_tm + K_t*y_t;
-    temp = K_t*H; temp = eye(size(temp)) - temp;
-    P_t_t = temp*P_t_tm*temp' + K_t*R*K_t';
-end
-
-function [u_vec, m_sm] = kf_meas_vec(a, w, m)
-    a_sm = smooth_mean(a);
-    w_sm = smooth_mean(w);
-    m_sm = smooth_mean(m);
-    u_vec = [reshape(a_sm, 1, 3), reshape(w_sm, 1, 3)];
-end
-
-
-function vec_out = smooth_mean(mat)
-    vec_out = mean(smoothdata(mat, 1, "gaussian", [4,4]), 1); 
 end
